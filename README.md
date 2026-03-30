@@ -11,7 +11,7 @@ KEV Daily Risk Monitoring (V2) is a separate project from the existing KEV workf
   - **daily KEV snapshots**
 - V2 stores daily results in warehouse-style tables
 
-The purpose of V2 is to generate a **daily top 20 risk list** using the latest Tenable snapshot and the current day’s KEV data.
+The purpose of V2 is to generate a **daily top 20 risk list** using the latest Tenable snapshot and the current day's KEV data, then produce an **AI-generated daily email** summarizing actively monitored risks and newly identified threats with context.
 
 ---
 
@@ -70,13 +70,13 @@ CREATE TABLE daily_kev_top20 (
   hosts INT NOT NULL,
   ransomware_flag TINYINT NOT NULL DEFAULT 0,
   priority_score INT NOT NULL,
-  rank INT NOT NULL,
+  risk_rank INT NOT NULL,
 
   PRIMARY KEY (id),
   KEY idx_run_date (run_date),
   KEY idx_kev_run (kev_run_id),
   KEY idx_dtkey (dtkey),
-  KEY idx_rank (rank)
+  KEY idx_risk_rank (risk_rank)
 );
 ```
 
@@ -91,6 +91,7 @@ CREATE TABLE daily_kev_top20 (
 5. Join that Tenable dataset to the KEV snapshot
 6. Score the results
 7. Insert the top 20 into `daily_kev_top20`
+8. Generate daily email: compare today's top 20 to yesterday's top 20, identify new entries, and produce AI-written executive summary with contextual explanations
 
 ---
 
@@ -144,6 +145,19 @@ It preserves:
 
 ---
 
+## Daily Email Generation
+
+After the top 20 is generated, an OpenClaw skill queries the previous day's top 20 and compares it to today's results.
+
+The email structure:
+- **Currently monitored:** List of risks that remain in today's top 20 (continuing focus areas)
+- **New critical issues:** List of risks that entered the top 20 today, with AI-generated context explaining why each is important
+- **Output:** Saved to `/opt/out/saltedearth/daily_kev_email_{date}.txt` and sent via Telegram
+
+The AI (Qwen3) is prompted with structured data (CVE details, host counts, ransomware flags, severity) and generates professional, actionable explanations for new entries suitable for CISO-level communication.
+
+---
+
 ## Scope
 
 ### In Scope
@@ -151,12 +165,13 @@ It preserves:
 - daily top 20 generation
 - separate V2 project structure
 - historical storage by date
+- AI-generated daily email summarization
 
 ### Out of Scope
 - changes to V1
 - changes to Tenable import schedule
 - extra scoring fields
-- `is_new`
+- `is_new` metadata flags
 - automation beyond the approved daily workflow
 
 ---
@@ -171,7 +186,19 @@ V2 stores:
 It uses:
 
 - the latest available Tenable `dtkey`
-- the current day’s KEV snapshot
+- the current day's KEV snapshot
 - the approved scoring logic
 
-This provides a simple daily warehouse model for KEV-based risk reporting while keeping V1 unchanged.
+It generates:
+
+- a daily AI-written email comparing today's risks to yesterday's, identifying new entries and providing context
+
+This provides a simple daily warehouse model for KEV-based risk reporting with progressive AI integration while keeping V1 unchanged.
+
+---
+
+## TODO
+
+- [ ] Add assignment tracking to database: `kev_assignment` table to track if a KEV entry is assigned, including assignment date and ticket ID
+  - Schema: `kev_id`, `assigned_date`, `ticket_id`, `assigned_to`
+  - Purpose: Enable tracking of which risks have been actioned and link to ticketing system
