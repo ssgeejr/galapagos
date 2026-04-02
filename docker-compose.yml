@@ -1,3 +1,10 @@
-mkdir -p ./root
-echo '<!DOCTYPE html><html><head><title>Tomcat 8</title></head><body><h1>Tomcat 8 is running!</h1></body></html>' > ./root/index.jsp
-docker-compose up -d
+version: '3.8'
+
+services:
+  tomcat:
+    image: tomcat:8.5-jdk8
+    container_name: tomcat8
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./root:/usr/local/tomcat/webapps/ROOT
