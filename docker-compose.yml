@@ -5,6 +5,6 @@ services:
     image: tomcat:8.5-jdk8
     container_name: tomcat8
     ports:
-      - "8080:8080"
+      - "8088:8080"
     volumes:
       - ./root:/usr/local/tomcat/webapps/ROOT
