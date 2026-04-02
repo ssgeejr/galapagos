@@ -5,11 +5,34 @@ KEV Importer V2
 Purpose
 -------
 - Fetch the current CISA KEV catalog
-- Compare it to the current/latest KEV xref set
-- Upsert into kev_item
-- Rebuild kev_xref as the current/live KEV list
+- Insert one row into kev_run for the current execution date
+- Insert the full KEV JSON snapshot into kev_run_data
+- Compare the current run to the immediately previous run
+- Insert only new KEV entries into kev_changes
 - Build today's daily_kev_top20 from the latest Tenable dtkey
 - Hard-exit if today's file has already been loaded
+
+Data Model
+----------
+kev_run
+    - One row per KEV import execution
+    - Represents a single daily snapshot
+    - Script checks this table first and refuses to run twice on the same day
+
+kev_run_data
+    - Full KEV catalog for that run
+    - Foreign key to kev_run.kev_run_id
+
+kev_changes
+    - Contains only KEV items that are new in the current run
+      compared to the immediately previous run
+    - Foreign key to kev_run.kev_run_id
+    - Stores kev_run_data_id values from the current run only
+    - If no previous run exists, nothing is inserted here
+
+daily_kev_top20
+    - Stores the daily ranked top 20 KEV-related risks
+    - Built from latest Tenable dtkey joined to current KEV run
 
 Config
 ------
@@ -24,6 +47,22 @@ port = 3306
 user = your_username
 password = your_password
 database = your_database
+
+Execution Behavior
+------------------
+- Script terminates immediately if a record already exists in kev_run for today
+- KEV data is fetched from CISA unless --noupdate is specified
+- Local copy of KEV JSON is stored as kev.json
+- All inserts occur in a single transaction
+- On failure, transaction is rolled back
+- On first run only, kev_changes remains empty because there is no previous run
+
+Output
+------
+- Prints a Teams-compatible status line:
+    [TO TEAMS==> KEV Status --> loaded=X; changes=Y; top20=Z; dtkey=A]
+
+- Prints formatted Top 20 results to stdout
 """
 
 from __future__ import annotations
@@ -35,9 +74,9 @@ import sys
 import tempfile
 import urllib.request
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import mysql.connector
 from mysql.connector import Error
@@ -46,10 +85,7 @@ from mysql.connector import Error
 @dataclass
 class KevSummary:
     total_feed_items: int
-    current_xref_items_before: int
-    new_cves_vs_current_xref: int
-    removed_cves_vs_current_xref: int
-    kev_item_active_count: int
+    changes_rows_inserted: int
     top20_rows_inserted: int
     latest_dtkey: str
 
@@ -71,7 +107,14 @@ class KEVImporterV2:
             print(message)
 
     def _load_db_config(self) -> dict[str, Any]:
-        config = configparser.ConfigParser()
+        """
+        Load MySQL settings from ~/.neurosentinel/db.conf.
+
+        RawConfigParser is used so characters like % in passwords are not
+        treated as interpolation markers.
+        """
+        config = configparser.RawConfigParser()
+
         if not self.CONFIG_PATH.exists():
             raise FileNotFoundError(
                 f"Database config not found: {self.CONFIG_PATH}\n"
@@ -85,10 +128,12 @@ class KEVImporterV2:
             )
 
         config.read(self.CONFIG_PATH)
+
         if "mysql" not in config:
             raise ValueError(f"[mysql] section missing in {self.CONFIG_PATH}")
 
         mysql_cfg = config["mysql"]
+
         return {
             "host": mysql_cfg.get("host", "localhost"),
             "port": mysql_cfg.getint("port", 3306),
@@ -98,6 +143,9 @@ class KEVImporterV2:
         }
 
     def _connect_db(self) -> None:
+        """
+        Open MySQL connection and dictionary cursor.
+        """
         try:
             self.conn = mysql.connector.connect(**self.db_config)
             self.cursor = self.conn.cursor(dictionary=True)
@@ -106,6 +154,9 @@ class KEVImporterV2:
             raise ConnectionError(f"Failed to connect to MySQL: {exc}") from exc
 
     def _close_db(self) -> None:
+        """
+        Close cursor and connection cleanly.
+        """
         if self.cursor:
             self.cursor.close()
         if self.conn and self.conn.is_connected():
@@ -114,16 +165,20 @@ class KEVImporterV2:
 
     def _check_already_loaded(self) -> None:
         """
-        Hard stop if today's daily_kev_top20 already exists.
+        Refuse to run if today's kev_run entry already exists.
+
+        This is the hard stop that prevents the same day from being loaded twice.
         """
         assert self.cursor is not None
+
         self.cursor.execute(
             """
             SELECT COUNT(*) AS row_count
-            FROM daily_kev_top20
+            FROM kev_run
             WHERE run_date = CURDATE()
             """
         )
+
         row = self.cursor.fetchone()
         row_count = int(row["row_count"]) if row else 0
 
@@ -133,48 +188,69 @@ class KEVImporterV2:
             sys.exit(1)
 
     def _load_feed_json(self) -> dict[str, Any]:
+        """
+        Fetch KEV JSON from CISA or load local kev.json if --noupdate is used.
+
+        A local copy is always written atomically when downloading fresh data.
+        """
         if self.no_update:
             if not self.LOCAL_JSON_PATH.exists():
                 raise FileNotFoundError(
                     "No local kev.json found. Run without --noupdate first or place kev.json in the current directory."
                 )
+
             self.log("ℹ️ Using local kev.json (--noupdate)")
             with self.LOCAL_JSON_PATH.open("r", encoding="utf-8") as fh:
                 data = json.load(fh)
-        else:
-            self.log(f"📥 Fetching KEV catalog from {self.KEV_URL} ...")
-            try:
-                with urllib.request.urlopen(self.KEV_URL, timeout=30) as response:
-                    raw = response.read()
-                data = json.loads(raw.decode("utf-8"))
-            except Exception as exc:
-                raise RuntimeError(f"Failed to fetch KEV JSON: {exc}") from exc
+            return data
 
-            if "vulnerabilities" not in data:
-                raise ValueError("Invalid KEV JSON: missing 'vulnerabilities' key")
+        self.log(f"📥 Fetching KEV catalog from {self.KEV_URL}")
 
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".tmp", delete=False, dir=".", encoding="utf-8"
-            ) as tmp:
-                json.dump(data, tmp, indent=2)
-                tmp_path = Path(tmp.name)
+        try:
+            with urllib.request.urlopen(self.KEV_URL, timeout=30) as response:
+                raw = response.read()
+            data = json.loads(raw.decode("utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Failed to fetch KEV JSON: {exc}") from exc
 
-            tmp_path.replace(self.LOCAL_JSON_PATH)
-            self.log(f"✅ Saved KEV feed to {self.LOCAL_JSON_PATH}")
+        if "vulnerabilities" not in data:
+            raise ValueError("Invalid KEV JSON: missing 'vulnerabilities' key")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".tmp",
+            delete=False,
+            dir=".",
+            encoding="utf-8",
+        ) as tmp:
+            json.dump(data, tmp, indent=2)
+            tmp_path = Path(tmp.name)
+
+        tmp_path.replace(self.LOCAL_JSON_PATH)
+        self.log(f"✅ Saved KEV feed to {self.LOCAL_JSON_PATH}")
 
         return data
 
     @staticmethod
     def _to_date(value: str | None) -> str | None:
+        """
+        Keep date fields as strings acceptable to MySQL or None if blank.
+        """
         if not value:
             return None
         return value
 
     @staticmethod
     def _ransomware_flag(value: str | None) -> int:
+        """
+        Convert KEV ransomware field into 1/0 integer.
+        """
         return 1 if value == "Known" else 0
 
     def _normalize_feed(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Normalize raw KEV JSON into a clean, deduplicated list keyed by CVE.
+        """
         normalized: list[dict[str, Any]] = []
         seen: set[str] = set()
 
@@ -182,6 +258,7 @@ class KEVImporterV2:
             cve_id = (item.get("cveID") or "").strip()
             if not cve_id or cve_id in seen:
                 continue
+
             seen.add(cve_id)
 
             normalized.append(
@@ -203,18 +280,32 @@ class KEVImporterV2:
 
         return normalized
 
-    def _get_current_xref_cves(self) -> set[str]:
+    def _insert_kev_run(self) -> int:
+        """
+        Insert one row into kev_run for today and return the new kev_run_id.
+        """
         assert self.cursor is not None
-        self.cursor.execute("SELECT cve_id FROM kev_xref")
-        rows = self.cursor.fetchall()
-        return {str(r["cve_id"]) for r in rows}
 
-    def _upsert_kev_item(self, feed_rows: list[dict[str, Any]]) -> None:
+        self.cursor.execute(
+            """
+            INSERT INTO kev_run (run_date)
+            VALUES (CURDATE())
+            """
+        )
+
+        kev_run_id = int(self.cursor.lastrowid)
+        self.log(f"🗓️ Inserted kev_run_id={kev_run_id} for today.")
+        return kev_run_id
+
+    def _insert_kev_run_data(self, kev_run_id: int, feed_rows: list[dict[str, Any]]) -> None:
+        """
+        Insert the full normalized KEV feed into kev_run_data for the current run.
+        """
         assert self.cursor is not None
-        today = date.today().isoformat()
 
         sql = """
-        INSERT INTO kev_item (
+        INSERT INTO kev_run_data (
+            kev_run_id,
             cve_id,
             vendor_project,
             product,
@@ -224,12 +315,10 @@ class KEVImporterV2:
             short_description,
             required_action,
             notes,
-            known_ransomware_campaign_use,
-            first_seen_date,
-            last_seen_date,
-            is_active
+            known_ransomware_campaign_use
         )
         VALUES (
+            %(kev_run_id)s,
             %(cve_id)s,
             %(vendor_project)s,
             %(product)s,
@@ -239,94 +328,83 @@ class KEVImporterV2:
             %(short_description)s,
             %(required_action)s,
             %(notes)s,
-            %(known_ransomware_campaign_use)s,
-            %(first_seen_date)s,
-            %(last_seen_date)s,
-            1
+            %(known_ransomware_campaign_use)s
         )
-        ON DUPLICATE KEY UPDATE
-            vendor_project = VALUES(vendor_project),
-            product = VALUES(product),
-            vulnerability_name = VALUES(vulnerability_name),
-            date_added = VALUES(date_added),
-            due_date = VALUES(due_date),
-            short_description = VALUES(short_description),
-            required_action = VALUES(required_action),
-            notes = VALUES(notes),
-            known_ransomware_campaign_use = VALUES(known_ransomware_campaign_use),
-            last_seen_date = VALUES(last_seen_date),
-            is_active = 1
         """
 
-        payload = []
+        payload: list[dict[str, Any]] = []
         for row in feed_rows:
             record = dict(row)
-            record["first_seen_date"] = today
-            record["last_seen_date"] = today
+            record["kev_run_id"] = kev_run_id
             payload.append(record)
 
         self.cursor.executemany(sql, payload)
-        self.log(f"🔄 Upserted {len(payload)} rows into kev_item.")
+        self.log(f"📥 Inserted {len(payload)} rows into kev_run_data.")
 
-    def _mark_inactive_missing_cves(self, feed_cves: set[str]) -> None:
-        assert self.cursor is not None
-        if not feed_cves:
-            raise RuntimeError("Refusing to mark kev_item inactive because the current KEV feed is empty.")
-
-        placeholders = ", ".join(["%s"] * len(feed_cves))
-        sql = f"""
-        UPDATE kev_item
-        SET is_active = 0
-        WHERE cve_id NOT IN ({placeholders})
+    def _get_previous_run_id(self, current_run_id: int) -> int | None:
         """
-        self.cursor.execute(sql, tuple(sorted(feed_cves)))
-        self.log(f"🔕 Marked missing CVEs inactive in kev_item ({self.cursor.rowcount} rows affected).")
+        Return the immediately previous kev_run_id, not 'yesterday'.
 
-    def _rebuild_kev_xref(self, feed_cves: set[str]) -> None:
+        This allows for missed days or delayed runs without breaking the diff logic.
+        """
         assert self.cursor is not None
-        if not feed_cves:
-            raise RuntimeError("Refusing to rebuild kev_xref because the current KEV feed is empty.")
 
-        placeholders = ", ".join(["%s"] * len(feed_cves))
-
-        self.cursor.execute("TRUNCATE TABLE kev_xref")
-        self.log("🧹 Truncated kev_xref.")
-
-        insert_sql = f"""
-        INSERT INTO kev_xref (
-            kev_item_id,
-            cve_id,
-            vendor_project,
-            product,
-            vulnerability_name,
-            date_added,
-            due_date,
-            short_description,
-            required_action,
-            notes,
-            known_ransomware_campaign_use
+        self.cursor.execute(
+            """
+            SELECT kev_run_id
+            FROM kev_run
+            WHERE kev_run_id < %s
+            ORDER BY kev_run_id DESC
+            LIMIT 1
+            """,
+            (current_run_id,),
         )
-        SELECT
-            kev_item_id,
-            cve_id,
-            vendor_project,
-            product,
-            vulnerability_name,
-            date_added,
-            due_date,
-            short_description,
-            required_action,
-            notes,
-            known_ransomware_campaign_use
-        FROM kev_item
-        WHERE cve_id IN ({placeholders})
-          AND is_active = 1
+
+        row = self.cursor.fetchone()
+        if not row:
+            return None
+
+        return int(row["kev_run_id"])
+
+    def _insert_kev_changes(self, current_run_id: int) -> int:
         """
-        self.cursor.execute(insert_sql, tuple(sorted(feed_cves)))
-        self.log(f"♻️ Rebuilt kev_xref with {self.cursor.rowcount} current rows.")
+        Compare the current run to the immediately previous run and insert only
+        newly introduced CVEs into kev_changes.
+
+        If there is no previous run, insert nothing.
+        """
+        assert self.cursor is not None
+
+        previous_run_id = self._get_previous_run_id(current_run_id)
+
+        if previous_run_id is None:
+            self.log("ℹ️ No previous run found — skipping kev_changes.")
+            return 0
+
+        insert_sql = """
+        INSERT INTO kev_changes (kev_run_id, kev_run_data_id)
+        SELECT
+            cur.kev_run_id,
+            cur.kev_run_data_id
+        FROM kev_run_data cur
+        LEFT JOIN kev_run_data prev
+            ON prev.cve_id = cur.cve_id
+           AND prev.kev_run_id = %s
+        WHERE cur.kev_run_id = %s
+          AND prev.kev_run_data_id IS NULL
+        """
+
+        self.cursor.execute(insert_sql, (previous_run_id, current_run_id))
+        inserted = int(self.cursor.rowcount)
+        self.log(f"🆕 Inserted {inserted} rows into kev_changes.")
+        return inserted
 
     def _get_latest_dtkey(self) -> str:
+        """
+        Get the latest available Tenable dtkey from scorecard.
+        """
         assert self.cursor is not None
+
         self.cursor.execute(
             """
             SELECT dtkey
@@ -335,19 +413,25 @@ class KEVImporterV2:
             LIMIT 1
             """
         )
+
         row = self.cursor.fetchone()
         if not row or not row.get("dtkey"):
             raise RuntimeError("Could not determine latest dtkey from scorecard.")
+
         return str(row["dtkey"])
 
-    def _build_daily_top20(self, dtkey: str) -> int:
+    def _build_daily_top20(self, dtkey: str, kev_run_id: int) -> int:
+        """
+        Build today's daily_kev_top20 using the current KEV run and latest dtkey.
+        """
         assert self.cursor is not None
 
-        delete_sql = """
-        DELETE FROM daily_kev_top20
-        WHERE run_date = CURDATE()
-        """
-        self.cursor.execute(delete_sql)
+        self.cursor.execute(
+            """
+            DELETE FROM daily_kev_top20
+            WHERE run_date = CURDATE()
+            """
+        )
 
         insert_sql = """
         INSERT INTO daily_kev_top20 (
@@ -388,8 +472,9 @@ class KEVImporterV2:
                     COUNT(DISTINCT s.host) +
                         (CASE WHEN MAX(k.known_ransomware_campaign_use) = 1 THEN 100 ELSE 0 END) AS priority_score
                 FROM scorecard s
-                INNER JOIN kev_xref k
+                INNER JOIN kev_run_data k
                     ON k.cve_id = s.cve
+                   AND k.kev_run_id = %s
                 WHERE s.dtkey = %s
                   AND s.kev_flag = 1
                 GROUP BY s.pluginid, s.solution
@@ -398,18 +483,18 @@ class KEVImporterV2:
         WHERE ranked.risk_rank <= 20
         ORDER BY ranked.risk_rank
         """
-        self.cursor.execute(insert_sql, (dtkey, dtkey))
-        self.log(f"📊 Inserted {self.cursor.rowcount} rows into daily_kev_top20.")
-        return int(self.cursor.rowcount)
 
-    def _count_active_kev_items(self) -> int:
-        assert self.cursor is not None
-        self.cursor.execute("SELECT COUNT(*) AS cnt FROM kev_item WHERE is_active = 1")
-        row = self.cursor.fetchone()
-        return int(row["cnt"]) if row else 0
+        self.cursor.execute(insert_sql, (dtkey, kev_run_id, dtkey))
+        inserted = int(self.cursor.rowcount)
+        self.log(f"📊 Inserted {inserted} rows into daily_kev_top20.")
+        return inserted
 
     def _fetch_today_top20(self) -> list[dict[str, Any]]:
+        """
+        Fetch today's top 20 rows for display.
+        """
         assert self.cursor is not None
+
         self.cursor.execute(
             """
             SELECT
@@ -424,20 +509,25 @@ class KEVImporterV2:
             ORDER BY risk_rank
             """
         )
+
         return list(self.cursor.fetchall())
 
     def _print_status(self, summary: KevSummary) -> None:
+        """
+        Print compact Teams-style status line.
+        """
         status = (
             f"loaded={summary.total_feed_items}; "
-            f"new_vs_current={summary.new_cves_vs_current_xref}; "
-            f"removed_vs_current={summary.removed_cves_vs_current_xref}; "
-            f"active={summary.kev_item_active_count}; "
+            f"changes={summary.changes_rows_inserted}; "
             f"top20={summary.top20_rows_inserted}; "
             f"dtkey={summary.latest_dtkey}"
         )
         print(f"[TO TEAMS==> KEV Status --> {status}]")
 
     def _print_top20(self) -> None:
+        """
+        Print today's top 20 in readable table format.
+        """
         rows = self._fetch_today_top20()
         if not rows:
             print("No top 20 rows found for today.")
@@ -448,10 +538,12 @@ class KEVImporterV2:
         print("-" * 120)
         print(f"{'Rank':<6} {'PluginID':<12} {'Hosts':<8} {'Ransom':<8} {'Priority':<10} Solution")
         print("-" * 120)
+
         for row in rows:
             solution = (row.get("solution") or "").replace("\n", " ").strip()
             if len(solution) > 72:
                 solution = solution[:69] + "..."
+
             print(
                 f"{str(row.get('risk_rank', '')):<6} "
                 f"{str(row.get('pluginid', '')):<12} "
@@ -462,38 +554,47 @@ class KEVImporterV2:
             )
 
     def run(self) -> None:
+        """
+        Main execution flow.
+
+        Order of operations:
+        1. Connect to DB
+        2. Refuse duplicate same-day run
+        3. Load KEV feed
+        4. Insert kev_run
+        5. Insert kev_run_data
+        6. Insert kev_changes compared to immediately previous run
+        7. Build daily_kev_top20
+        8. Commit and print status
+        """
         self._connect_db()
+
         try:
             self._check_already_loaded()
 
             data = self._load_feed_json()
             feed_rows = self._normalize_feed(data)
+
             if not feed_rows:
                 raise RuntimeError("KEV feed returned zero vulnerabilities.")
 
-            feed_cves = {row["cve_id"] for row in feed_rows}
-            current_xref_cves = self._get_current_xref_cves()
-
-            self.conn.start_transaction()
-
-            self._upsert_kev_item(feed_rows)
-            self._mark_inactive_missing_cves(feed_cves)
-            self._rebuild_kev_xref(feed_cves)
+            run_id = self._insert_kev_run()
+            self._insert_kev_run_data(run_id, feed_rows)
+            changes_count = self._insert_kev_changes(run_id)
 
             latest_dtkey = self._get_latest_dtkey()
-            top20_count = self._build_daily_top20(latest_dtkey)
+            top20_count = self._build_daily_top20(latest_dtkey, run_id)
 
+            assert self.conn is not None
             self.conn.commit()
 
             summary = KevSummary(
                 total_feed_items=len(feed_rows),
-                current_xref_items_before=len(current_xref_cves),
-                new_cves_vs_current_xref=len(feed_cves - current_xref_cves),
-                removed_cves_vs_current_xref=len(current_xref_cves - feed_cves),
-                kev_item_active_count=self._count_active_kev_items(),
+                changes_rows_inserted=changes_count,
                 top20_rows_inserted=top20_count,
                 latest_dtkey=latest_dtkey,
             )
+
             self._print_status(summary)
             self._print_top20()
 
@@ -506,6 +607,9 @@ class KEVImporterV2:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """
+    Build command-line argument parser.
+    """
     parser = argparse.ArgumentParser(description="KEV Importer V2")
     parser.add_argument(
         "--noupdate",
@@ -516,6 +620,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """
+    CLI entrypoint.
+    """
     parser = build_arg_parser()
     args = parser.parse_args()
 

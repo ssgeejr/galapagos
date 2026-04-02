@@ -1,7 +1,8 @@
 -- DROP OLD TABLES
-DROP TABLE IF EXISTS kev_xref;
-DROP TABLE IF EXISTS kev_item;
+DROP TABLE IF EXISTS kev_changes;
 DROP TABLE IF EXISTS daily_kev_top20;
+DROP TABLE IF EXISTS kev_run_data;
+DROP TABLE IF EXISTS kev_run;
 
 
 -- CREATE NEW TABLES
@@ -12,7 +13,6 @@ CREATE TABLE kev_run (
   PRIMARY KEY (kev_run_id),
   UNIQUE KEY uq_kev_run_date (run_date)
 );
-
 
 CREATE TABLE kev_run_data (
   kev_run_data_id BIGINT NOT NULL AUTO_INCREMENT,
@@ -39,7 +39,6 @@ CREATE TABLE kev_run_data (
     ON DELETE CASCADE
 );
 
-
 CREATE TABLE daily_kev_top20 (
   id BIGINT NOT NULL AUTO_INCREMENT,
   run_date DATE NOT NULL,
@@ -56,4 +55,25 @@ CREATE TABLE daily_kev_top20 (
   KEY idx_daily_kev_top20_run_date (run_date),
   KEY idx_daily_kev_top20_dtkey (dtkey),
   KEY idx_daily_kev_top20_pluginid (pluginid)
+);
+
+CREATE TABLE kev_changes (
+  kev_change_id BIGINT NOT NULL AUTO_INCREMENT,
+  kev_run_id BIGINT NOT NULL,
+  kev_run_data_id BIGINT NOT NULL,
+
+  PRIMARY KEY (kev_change_id),
+  UNIQUE KEY uq_kev_changes_run_data (kev_run_id, kev_run_data_id),
+  KEY idx_kev_changes_run_id (kev_run_id),
+  KEY idx_kev_changes_run_data_id (kev_run_data_id),
+
+  CONSTRAINT fk_kev_changes_run
+    FOREIGN KEY (kev_run_id)
+    REFERENCES kev_run (kev_run_id)
+    ON DELETE CASCADE,
+
+  CONSTRAINT fk_kev_changes_run_data
+    FOREIGN KEY (kev_run_data_id)
+    REFERENCES kev_run_data (kev_run_data_id)
+    ON DELETE CASCADE
 );
