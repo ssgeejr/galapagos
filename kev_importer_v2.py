@@ -366,6 +366,43 @@ class KEVImporterV2:
 
         return int(row["kev_run_id"])
 
+    def _insert_kev_updates(self, kev_run_id: int) -> int:
+        """
+        Update scorecard with KEV flags for the latest dtkey.
+
+        Matches scorecard records to kev_run_data by CVE and applies
+        kev_flag=1 and kev_ransomware_flag from the current KEV run.
+
+        Returns the number of rows updated.
+        """
+        assert self.cursor is not None
+
+        update_sql = """
+        UPDATE scorecard s
+        JOIN kev_run_data k
+          ON s.cve = k.cve_id
+        SET
+          s.kev_flag = 1,
+          s.kev_ransomware_flag = k.known_ransomware_campaign_use
+        WHERE s.dtkey = (
+          SELECT max_dtkey FROM (
+            SELECT dtkey as max_dtkey
+            FROM scorecard
+            ORDER BY
+              SUBSTR(dtkey, 3, 2) DESC,
+              SUBSTR(dtkey, 1, 2) DESC,
+              SUBSTR(dtkey, 5, 1) DESC
+            LIMIT 1
+          ) as subq
+        )
+        AND k.kev_run_id = %s
+        """
+
+        self.cursor.execute(update_sql, (kev_run_id,))
+        updated = int(self.cursor.rowcount)
+        self.log(f"✅ Updated {updated} rows in scorecard with KEV flags.")
+        return updated
+
     def _insert_kev_changes(self, current_run_id: int) -> int:
         """
         Compare the current run to the immediately previous run and insert only
@@ -563,9 +600,10 @@ class KEVImporterV2:
         3. Load KEV feed
         4. Insert kev_run
         5. Insert kev_run_data
-        6. Insert kev_changes compared to immediately previous run
-        7. Build daily_kev_top20
-        8. Commit and print status
+        6. Update scorecard with KEV flags for latest dtkey
+        7. Insert kev_changes compared to immediately previous run
+        8. Build daily_kev_top20
+        9. Commit and print status
         """
         self._connect_db()
 
@@ -580,6 +618,7 @@ class KEVImporterV2:
 
             run_id = self._insert_kev_run()
             self._insert_kev_run_data(run_id, feed_rows)
+            self._insert_kev_updates(run_id)
             changes_count = self._insert_kev_changes(run_id)
 
             latest_dtkey = self._get_latest_dtkey()
