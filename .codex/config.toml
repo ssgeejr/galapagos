@@ -1,0 +1,4 @@
+model = "gpt-5.3-codex"
+
+[projects."/opt/apps/galapagos"]
+trust_level = "trusted"
