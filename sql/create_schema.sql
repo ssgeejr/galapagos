@@ -1,5 +1,6 @@
 -- DROP OLD TABLES
 DROP TABLE IF EXISTS kev_changes;
+DROP TABLE IF EXISTS plugin_status;
 DROP TABLE IF EXISTS daily_kev_top20;
 DROP TABLE IF EXISTS kev_run_data;
 DROP TABLE IF EXISTS kev_run;
@@ -55,6 +56,20 @@ CREATE TABLE daily_kev_top20 (
   KEY idx_daily_kev_top20_run_date (run_date),
   KEY idx_daily_kev_top20_dtkey (dtkey),
   KEY idx_daily_kev_top20_pluginid (pluginid)
+);
+
+CREATE TABLE plugin_status (
+  plugin_status_id BIGINT NOT NULL AUTO_INCREMENT,
+  pluginid INT NOT NULL,
+  ticketid VARCHAR(64) NULL,
+  status INT NOT NULL DEFAULT 0,
+  status_update DATETIME NULL,
+  create_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (plugin_status_id),
+  UNIQUE KEY uq_plugin_status_pluginid (pluginid),
+  KEY idx_plugin_status_ticketid (ticketid),
+  KEY idx_plugin_status_status (status)
 );
 
 CREATE TABLE kev_changes (

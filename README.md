@@ -82,6 +82,31 @@ CREATE TABLE daily_kev_top20 (
 
 ---
 
+### `plugin_status`
+
+Stores plugin-level tracking state used by `/kev status`, ticket linkage, and lifecycle commands.
+
+```sql
+CREATE TABLE plugin_status (
+  plugin_status_id BIGINT NOT NULL AUTO_INCREMENT,
+  pluginid INT NOT NULL,
+  ticketid VARCHAR(64) NULL,
+  status INT NOT NULL DEFAULT 0,
+  status_update DATETIME NULL,
+  create_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (plugin_status_id),
+  UNIQUE KEY uq_plugin_status_pluginid (pluginid)
+);
+```
+
+Behavior:
+- Each run seeds `plugin_status` from today's `daily_kev_top20`.
+- New plugin IDs are inserted.
+- Existing plugin IDs are left unchanged.
+
+---
+
 ## Daily Workflow
 
 1. Pull daily KEV data
@@ -91,7 +116,8 @@ CREATE TABLE daily_kev_top20 (
 5. Join that Tenable dataset to the KEV snapshot
 6. Score the results
 7. Insert the top 20 into `daily_kev_top20`
-8. Generate daily email: compare today's top 20 to yesterday's top 20, identify new entries, and produce AI-written executive summary with contextual explanations
+8. Seed `plugin_status` from today's `daily_kev_top20` (insert only if missing)
+9. Generate daily email: compare today's top 20 to yesterday's top 20, identify new entries, and produce AI-written executive summary with contextual explanations
 
 ---
 

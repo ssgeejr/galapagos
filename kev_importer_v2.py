@@ -34,6 +34,11 @@ daily_kev_top20
     - Stores the daily ranked top 20 KEV-related risks
     - Built from latest Tenable dtkey joined to current KEV run
 
+plugin_status
+    - Stores plugin tracking state for command workflows
+    - Seeded from today's daily_kev_top20
+    - Insert-only behavior during importer run (existing plugin rows are unchanged)
+
 Config
 ------
 Reads MySQL credentials from:
@@ -526,6 +531,31 @@ class KEVImporterV2:
         self.log(f"📊 Inserted {inserted} rows into daily_kev_top20.")
         return inserted
 
+    def _seed_plugin_status_from_top20(self) -> int:
+        """
+        Insert today's top-20 plugin IDs into plugin_status if missing.
+
+        Existing plugin_status rows are left unchanged.
+        """
+        assert self.cursor is not None
+
+        self.cursor.execute(
+            """
+            INSERT IGNORE INTO plugin_status (
+                pluginid
+            )
+            SELECT DISTINCT
+                CAST(t.pluginid AS UNSIGNED) AS pluginid
+            FROM daily_kev_top20 t
+            WHERE t.run_date = CURDATE()
+              AND t.pluginid REGEXP '^[0-9]+$'
+            """
+        )
+
+        inserted = int(self.cursor.rowcount)
+        self.log(f"🧷 Seeded {inserted} new rows into plugin_status.")
+        return inserted
+
     def _fetch_today_top20(self) -> list[dict[str, Any]]:
         """
         Fetch today's top 20 rows for display.
@@ -603,7 +633,8 @@ class KEVImporterV2:
         6. Update scorecard with KEV flags for latest dtkey
         7. Insert kev_changes compared to immediately previous run
         8. Build daily_kev_top20
-        9. Commit and print status
+        9. Seed plugin_status from today's daily_kev_top20
+        10. Commit and print status
         """
         self._connect_db()
 
@@ -623,6 +654,7 @@ class KEVImporterV2:
 
             latest_dtkey = self._get_latest_dtkey()
             top20_count = self._build_daily_top20(latest_dtkey, run_id)
+            self._seed_plugin_status_from_top20()
 
             assert self.conn is not None
             self.conn.commit()
