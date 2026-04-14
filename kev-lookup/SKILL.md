@@ -1,43 +1,27 @@
-# kev-lookup Skill
-
-Automatically check for new CISA Known Exploited Vulnerabilities.
+# /kev top Skill
 
 ## Purpose
-- Download latest KEV JSON from CISA
-- Compare with previous version
-- Report new/removed/updated CVEs
-- Save summary markdown file
+Handle only `/kev top` and return the current KEV Top 20 as a formatted table.
 
-## Working Directory
-`/opt/apps/kevctem`
+## Command
+- `/kev top`
 
-## Trigger Phrases
-- "lookup any new kevs"
-- "check kev"
-- "new kev updates"
-- "run kev diff"
-- "cisa kev"
-- "kev lookup"
-- "show me new known exploited vulnerabilities"
+## Parsing Rules
+- Require exact `/kev top`.
+- Do not infer, fuzzy-match, or route other `/kev` commands here.
 
-## Required Tools
-- exec
-- read
-- write
+## Runtime Behavior
+- Keep this layer thin.
+- Delegate query and table rendering to `services/kev_top_service.py` (`KevTopService`).
 
-## Usage
-```
-lookup any new kevs
-```
+## Data Query
+Use the approved Top 20 query pattern already defined in the project.
 
 ## Output
-- Console summary with CVE table
-- Markdown summary saved to `kev-summary-MMDDYYYY.md`
-
-## First Run Behavior
-If no previous KEV file exists, downloads and reports total CVE count.
-
-## Implementation
-- Script: `/opt/apps/kevctem/scripts/kev_lookup.py`
-- JSON files: `/opt/apps/kevctem/kev-MMDDYYYY.json`
-- Summaries: `/opt/apps/kevctem/kev-summary-MMDDYYYY.md`
+Return a clean fixed-width table with:
+- rank
+- pluginid
+- hosts
+- ransomware flag
+- priority score
+- solution (truncated for display)
