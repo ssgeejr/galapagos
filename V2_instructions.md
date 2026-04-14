@@ -2,6 +2,7 @@
 DROP TABLE IF EXISTS kev_xref;
 DROP TABLE IF EXISTS kev_item;
 DROP TABLE IF EXISTS plugin_status;
+DROP TABLE IF EXISTS status_xref;
 DROP TABLE IF EXISTS daily_kev_top20;
 
 
@@ -59,18 +60,32 @@ CREATE TABLE daily_kev_top20 (
   KEY idx_daily_kev_top20_pluginid (pluginid)
 );
 
+CREATE TABLE status_xref (
+  status_key TINYINT NOT NULL AUTO_INCREMENT,
+  status VARCHAR(8) NOT NULL,
+  PRIMARY KEY (status_key),
+  UNIQUE KEY uq_status_xref_status (status)
+);
+
+INSERT INTO status_xref (status) VALUES
+('open'),
+('closed');
+
 CREATE TABLE plugin_status (
   plugin_status_id BIGINT NOT NULL AUTO_INCREMENT,
   pluginid INT NOT NULL,
   ticketid VARCHAR(64) NULL,
-  status INT NOT NULL DEFAULT 0,
+  status_key TINYINT NOT NULL DEFAULT 1,
   status_update DATETIME NULL,
   create_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   PRIMARY KEY (plugin_status_id),
   UNIQUE KEY uq_plugin_status_pluginid (pluginid),
   KEY idx_plugin_status_ticketid (ticketid),
-  KEY idx_plugin_status_status (status)
+  KEY idx_plugin_status_status_key (status_key),
+  CONSTRAINT fk_plugin_status_status_key
+    FOREIGN KEY (status_key)
+    REFERENCES status_xref (status_key)
 );
 
 
@@ -95,4 +110,3 @@ CREATE TABLE kev_changes (
     REFERENCES kev_run_data (kev_run_data_id)
     ON DELETE CASCADE
 );
-
