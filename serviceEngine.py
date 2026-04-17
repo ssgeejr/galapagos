@@ -229,8 +229,8 @@ class ServiceEngineRunner:
             try:
                 output = ServiceEngine(cursor).execute(*argv)
                 conn.commit()
-                #print(output)
-                return output
+                print(output)
+                #return output
             except Exception:
                 conn.rollback()
                 raise
