@@ -666,8 +666,8 @@ class KEVImporterV2:
                 latest_dtkey=latest_dtkey,
             )
 
-            self._print_status(summary)
-            self._print_top20()
+#            self._print_status(summary)
+#            self._print_top20()
 
         except Exception:
             if self.conn:
