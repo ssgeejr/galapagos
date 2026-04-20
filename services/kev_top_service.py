@@ -64,35 +64,24 @@ LIMIT 20
         return normalized
 
     def _format_table(self, rows: list[dict[str, Any]]) -> str:
-        columns = ["Rank", "PluginID", "Hosts", "Ransom", "Priority", "Solution"]
-
-        table_rows: list[list[str]] = []
-        for idx, row in enumerate(rows, start=1):
-            table_rows.append(
-                [
-                    str(idx),
-                    str(row.get("pluginid") or ""),
-                    str(row.get("hosts") or 0),
-                    str(row.get("ransomware") or 0),
-                    str(row.get("priority_score") or 0),
-                    str(row.get("solution") or ""),
-                ]
-            )
-
-        if not table_rows:
+        if not rows:
             return "No KEV top-20 results found."
 
-        widths = [len(header) for header in columns]
-        for row in table_rows:
-            for i, cell in enumerate(row):
-                if len(cell) > widths[i]:
-                    widths[i] = len(cell)
-
-        header = " | ".join(columns[i].ljust(widths[i]) for i in range(len(columns)))
-        separator = "-+-".join("-" * widths[i] for i in range(len(columns)))
-        body = [
-            " | ".join(row[i].ljust(widths[i]) for i in range(len(columns)))
-            for row in table_rows
+        lines = [
+            "KEV Top 20",
+            "Ranked by priority score from the latest KEV snapshot.",
+            "",
         ]
+        for idx, row in enumerate(rows, start=1):
+            ransomware = "yes" if str(row.get("ransomware") or "0") == "1" else "no"
+            lines.append(
+                f"{idx}. Plugin {row.get('pluginid') or ''} | "
+                f"{row.get('hosts') or 0} host(s) | "
+                f"ransomware: {ransomware} | "
+                f"priority: {row.get('priority_score') or 0}"
+            )
+            solution = str(row.get("solution") or "").strip()
+            if solution:
+                lines.append(f"Solution: {solution}")
 
-        return "\n".join([header, separator, *body])
+        return "\n".join(lines)

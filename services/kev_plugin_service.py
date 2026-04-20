@@ -61,19 +61,6 @@ ORDER BY host
         if not hosts:
             return f"No hosts found for pluginid {pluginid} on latest dtkey."
 
-        columns = ["#", "Host"]
-        table_rows = [[str(i), host] for i, host in enumerate(hosts, start=1)]
-
-        widths = [len(columns[0]), len(columns[1])]
-        for row in table_rows:
-            if len(row[0]) > widths[0]:
-                widths[0] = len(row[0])
-            if len(row[1]) > widths[1]:
-                widths[1] = len(row[1])
-
-        header = f"PluginID: {pluginid} | Hosts: {len(hosts)}"
-        table_header = f"{columns[0].ljust(widths[0])} | {columns[1].ljust(widths[1])}"
-        separator = f"{'-' * widths[0]}-+-{'-' * widths[1]}"
-        body = [f"{row[0].ljust(widths[0])} | {row[1].ljust(widths[1])}" for row in table_rows]
-
-        return "\n".join([header, table_header, separator, *body])
+        lines = [f"Plugin {pluginid} affects {len(hosts)} host(s):"]
+        lines.extend(f"- {host}" for host in hosts)
+        return "\n".join(lines)

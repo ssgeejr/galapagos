@@ -62,20 +62,17 @@ WHERE ticketid = %s
                 self._INSERT_PLUGIN_STATUS_SQL,
                 (int(normalized_pluginid), normalized_ticketid),
             )
-            return f"Ticket linked: pluginid={normalized_pluginid}, ticketid={normalized_ticketid}"
+            return f"Linked ticket {normalized_ticketid} to plugin {normalized_pluginid}."
 
         existing_ticket = str(row.get("ticketid") or "").strip()
         if existing_ticket:
-            return (
-                f"Ticket already linked: pluginid={normalized_pluginid}, "
-                f"ticketid={existing_ticket}. No change made."
-            )
+            return f"Plugin {normalized_pluginid} already has ticket {existing_ticket}. No change made."
 
         self._cursor.execute(
             self._UPDATE_TICKET_SQL,
             (normalized_ticketid, int(normalized_pluginid)),
         )
-        return f"Ticket linked: pluginid={normalized_pluginid}, ticketid={normalized_ticketid}"
+        return f"Linked ticket {normalized_ticketid} to plugin {normalized_pluginid}."
 
     def update_by_plugin(self, pluginid: str, state: str) -> str:
         normalized_pluginid = self._normalize_pluginid(pluginid)
@@ -85,11 +82,8 @@ WHERE ticketid = %s
             (status_key, int(normalized_pluginid)),
         )
         if int(getattr(self._cursor, "rowcount", 0)) == 0:
-            return f"No plugin_status row found for pluginid={normalized_pluginid}. No change made."
-        return (
-            f"Ticket status updated by plugin: pluginid={normalized_pluginid}, "
-            f"status_key={status_key} ({status_name})"
-        )
+            return f"No status row found for plugin {normalized_pluginid}. No change made."
+        return f"Updated plugin {normalized_pluginid} to {status_name}."
 
     def update_by_ticket(self, ticketid: str, state: str) -> str:
         normalized_ticketid = self._normalize_ticketid(ticketid)
@@ -100,11 +94,8 @@ WHERE ticketid = %s
         )
         changed = int(getattr(self._cursor, "rowcount", 0))
         if changed == 0:
-            return f"No plugin_status row found for ticketid={normalized_ticketid}. No change made."
-        return (
-            f"Ticket status updated by ticket: ticketid={normalized_ticketid}, "
-            f"status_key={status_key} ({status_name}), rows={changed}"
-        )
+            return f"No status row found for ticket {normalized_ticketid}. No change made."
+        return f"Updated ticket {normalized_ticketid} to {status_name}."
 
     def _normalize_pluginid(self, pluginid: str) -> str:
         value = str(pluginid or "").strip()

@@ -18,7 +18,6 @@ class KevHelpService:
     ]
 
     def run(self) -> str:
-        header = "Supported /kev Commands"
-        separator = "-" * len(header)
-        body = "\n".join(f"{idx}. {cmd}" for idx, cmd in enumerate(self._COMMANDS, start=1))
-        return f"{header}\n{separator}\n{body}"
+        lines = ["Supported KEV commands:"]
+        lines.extend(f"{idx}. {cmd}" for idx, cmd in enumerate(self._COMMANDS, start=1))
+        return "\n".join(lines)

@@ -40,7 +40,7 @@ class ServiceEngineTicketAddTests(unittest.TestCase):
 
         message = engine.execute("kev", "ticket", "add", "191942", "INC12345")
 
-        self.assertIn("Ticket linked: pluginid=191942, ticketid=INC12345", message)
+        self.assertEqual("Linked ticket INC12345 to plugin 191942.", message)
         self.assertEqual(len(cursor.executed), 2)
         self.assertIn("FROM plugin_status", cursor.executed[0][0])
         self.assertIn("INSERT INTO plugin_status", cursor.executed[1][0])
@@ -51,7 +51,7 @@ class ServiceEngineTicketAddTests(unittest.TestCase):
 
         message = engine.execute("kev", "ticket", "update", "plugin", "191942", "closed")
 
-        self.assertIn("Ticket status updated by plugin: pluginid=191942, status_key=2 (closed)", message)
+        self.assertEqual("Updated plugin 191942 to closed.", message)
         self.assertEqual(len(cursor.executed), 1)
         self.assertIn("UPDATE plugin_status", cursor.executed[0][0])
         self.assertIn("WHERE pluginid = %s", cursor.executed[0][0])
@@ -62,7 +62,7 @@ class ServiceEngineTicketAddTests(unittest.TestCase):
 
         message = engine.execute("kev", "ticket", "update", "id", "INC191942", "open")
 
-        self.assertIn("Ticket status updated by ticket: ticketid=INC191942, status_key=1 (open)", message)
+        self.assertEqual("Updated ticket INC191942 to open.", message)
         self.assertEqual(len(cursor.executed), 1)
         self.assertIn("UPDATE plugin_status", cursor.executed[0][0])
         self.assertIn("WHERE ticketid = %s", cursor.executed[0][0])
@@ -73,7 +73,7 @@ class ServiceEngineTicketAddTests(unittest.TestCase):
 
         message = engine.execute("kev ticket add 191942 INC99999")
 
-        self.assertIn("Ticket already linked: pluginid=191942, ticketid=INC00001", message)
+        self.assertEqual("Plugin 191942 already has ticket INC00001. No change made.", message)
         self.assertEqual(len(cursor.executed), 1)
         self.assertIn("FROM plugin_status", cursor.executed[0][0])
 
@@ -85,7 +85,7 @@ class ServiceEngineCloseTests(unittest.TestCase):
 
         message = engine.execute("kev", "close", "183969")
 
-        self.assertIn("Plugin closed: pluginid=183969, status_key=2", message)
+        self.assertEqual("Closed plugin 183969.", message)
         self.assertEqual(len(cursor.executed), 1)
         self.assertIn("INSERT INTO plugin_status", cursor.executed[0][0])
         self.assertIn("status_key = 2", cursor.executed[0][0])
@@ -96,14 +96,14 @@ class ServiceEngineCloseTests(unittest.TestCase):
 
         message = engine.execute("kev", "reopen", "183969")
 
-        self.assertIn("Plugin reopened: pluginid=183969, status_key=1", message)
+        self.assertEqual("Reopened plugin 183969.", message)
         self.assertEqual(len(cursor.executed), 1)
         self.assertIn("INSERT INTO plugin_status", cursor.executed[0][0])
         self.assertIn("status_key = 1", cursor.executed[0][0])
 
 
 class ServiceEngineTopStatusTests(unittest.TestCase):
-    def test_top_status_returns_overlay_table(self) -> None:
+    def test_top_status_returns_chat_summary(self) -> None:
         cursor = FakeCursor(
             fetchall_results=[
                 {
@@ -123,12 +123,10 @@ class ServiceEngineTopStatusTests(unittest.TestCase):
 
         output = engine.execute("kev", "top", "status")
 
-        self.assertIn("Rank", output)
-        self.assertIn("PluginID", output)
-        self.assertIn("SKey", output)
-        self.assertIn("191942", output)
-        self.assertIn("open", output)
-        self.assertIn("no-ticket-assigned", output)
+        self.assertIn("KEV Top 20 With Status", output)
+        self.assertIn("Fields: rank | plugin | status | ticket | hosts | ransomware | priority", output)
+        self.assertIn("1. Plugin 191942 | status: open | ticket: none | 3 host(s) | ransomware: yes | priority: 103", output)
+        self.assertIn("Solution: Apply Security Update 5035885", output)
 
 
 class ServiceEngineHelpTests(unittest.TestCase):
@@ -138,7 +136,7 @@ class ServiceEngineHelpTests(unittest.TestCase):
 
         output = engine.execute("kev", "help")
 
-        self.assertIn("Supported /kev Commands", output)
+        self.assertIn("Supported KEV commands:", output)
         self.assertIn("/kev top", output)
         self.assertIn("/kev ticket update plugin <pluginid> <state>", output)
         self.assertIn("/kev reopen <pluginid>", output)

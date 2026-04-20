@@ -93,33 +93,24 @@ ORDER BY t.risk_rank
         if not rows:
             return "No KEV top-status rows found for today."
 
-        columns = ["Rank", "PluginID", "Hosts", "Ransom", "Priority", "SKey", "Status", "TicketID", "Solution"]
-        table_rows: list[list[str]] = []
-        for row in rows:
-            table_rows.append(
-                [
-                    str(row.get("risk_rank") or ""),
-                    str(row.get("pluginid") or ""),
-                    str(row.get("hosts") or 0),
-                    str(row.get("ransomware_flag") or 0),
-                    str(row.get("priority_score") or 0),
-                    str(row.get("status_key") or 1),
-                    str(row.get("status_name") or "open"),
-                    str(row.get("ticketid") or "no-ticket-assigned"),
-                    str(row.get("solution") or ""),
-                ]
-            )
-
-        widths = [len(h) for h in columns]
-        for row in table_rows:
-            for i, cell in enumerate(row):
-                if len(cell) > widths[i]:
-                    widths[i] = len(cell)
-
-        header = " | ".join(columns[i].ljust(widths[i]) for i in range(len(columns)))
-        separator = "-+-".join("-" * widths[i] for i in range(len(columns)))
-        body = [
-            " | ".join(row[i].ljust(widths[i]) for i in range(len(columns)))
-            for row in table_rows
+        lines = [
+            "KEV Top 20 With Status",
+            "Ranked by priority score from today's KEV status view.",
+            "Fields: rank | plugin | status | ticket | hosts | ransomware | priority",
+            "",
         ]
-        return "\n".join([header, separator, *body])
+        for row in rows:
+            ransomware = "yes" if str(row.get("ransomware_flag") or "0") == "1" else "no"
+            ticketid = str(row.get("ticketid") or "").strip() or "none"
+            lines.append(
+                f"{row.get('risk_rank') or ''}. Plugin {row.get('pluginid') or ''} | "
+                f"status: {row.get('status_name') or 'open'} | "
+                f"ticket: {ticketid} | "
+                f"{row.get('hosts') or 0} host(s) | "
+                f"ransomware: {ransomware} | "
+                f"priority: {row.get('priority_score') or 0}"
+            )
+            solution = str(row.get("solution") or "").strip()
+            if solution:
+                lines.append(f"Solution: {solution}")
+        return "\n".join(lines)

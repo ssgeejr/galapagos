@@ -63,24 +63,12 @@ LIMIT 1
         status_update = str(row.get("status_update") or "")
         create_date = str(row.get("create_date") or "")
 
-        columns = ["Field", "Value"]
-        values = [
-            ["PluginID", str(row.get("pluginid") or pluginid)],
-            ["TicketID", ticketid if ticketid else "no-ticket-assigned"],
-            ["StatusKey", status_key],
-            ["Status", status_name],
-            ["StatusMap", "1=open, 2=closed"],
-            ["StatusUpdate", status_update if status_update else "(not set)"],
-            ["CreateDate", create_date],
+        lines = [
+            f"Plugin ID: {str(row.get('pluginid') or pluginid)}",
+            f"Status: {status_name}",
+            f"Status key: {status_key}",
+            f"Ticket: {ticketid if ticketid else 'none'}",
+            f"Last update: {status_update if status_update else '(not set)'}",
+            f"Created: {create_date}",
         ]
-
-        widths = [len(columns[0]), len(columns[1])]
-        for field, value in values:
-            widths[0] = max(widths[0], len(field))
-            widths[1] = max(widths[1], len(value))
-
-        header = f"{columns[0].ljust(widths[0])} | {columns[1].ljust(widths[1])}"
-        separator = f"{'-' * widths[0]}-+-{'-' * widths[1]}"
-        body = [f"{field.ljust(widths[0])} | {value.ljust(widths[1])}" for field, value in values]
-
-        return "\n".join([header, separator, *body])
+        return "\n".join(lines)

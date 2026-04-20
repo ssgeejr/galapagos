@@ -42,12 +42,12 @@ ON DUPLICATE KEY UPDATE
     def close(self, pluginid: str) -> str:
         normalized_pluginid = self._normalize_pluginid(pluginid)
         self._cursor.execute(self._CLOSE_SQL, (int(normalized_pluginid),))
-        return f"Plugin closed: pluginid={normalized_pluginid}, status_key=2"
+        return f"Closed plugin {normalized_pluginid}."
 
     def reopen(self, pluginid: str) -> str:
         normalized_pluginid = self._normalize_pluginid(pluginid)
         self._cursor.execute(self._REOPEN_SQL, (int(normalized_pluginid),))
-        return f"Plugin reopened: pluginid={normalized_pluginid}, status_key=1"
+        return f"Reopened plugin {normalized_pluginid}."
 
     def _normalize_pluginid(self, pluginid: str) -> str:
         value = str(pluginid or "").strip()
