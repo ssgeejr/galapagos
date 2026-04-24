@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -9,7 +10,7 @@ class KevPluginService:
     _PLUGIN_DETAIL_SQL = """
 SELECT DISTINCT
   s.host,
-  s.severity,
+  s.synopsis,
   s.cvss,
   k.cve_id AS cve,
   k.required_action,
@@ -17,7 +18,8 @@ SELECT DISTINCT
   k.vendor_project,
   k.product,
   k.due_date,
-  k.known_ransomware_campaign_use AS ransomware_flag
+  k.known_ransomware_campaign_use AS ransomware_flag,
+  k.vulnerability_name
 FROM scorecard s
 LEFT JOIN kev_run_data k
   ON s.cve = k.cve_id
@@ -41,6 +43,14 @@ AND kev_flag = 1
 AND pluginid = %s
 ORDER BY host
 """.strip()
+
+    # CISA boilerplate to strip from required_action
+    _CISA_BOILERPLATE = re.compile(
+        r"^Apply mitigations per vendor instructions"
+        r"(?:, follow applicable BOD \d+-\d+ guidance for cloud services)?"
+        r", or discontinue use of the product if (?:mitigations|updates) are unavailable\.",
+        re.IGNORECASE,
+    )
 
     def __init__(self, cursor: Any) -> None:
         self._cursor = cursor
@@ -90,9 +100,13 @@ ORDER BY host
                 "severity": first.get("severity"),
                 "cvss": first.get("cvss"),
                 "ransomware_flag": first.get("ransomware_flag"),
+                "vulnerability_name": first.get("vulnerability_name"),
             }
         else:
             # Fallback for tuple rows (index-based)
+            # Column order: host, synopsis, cvss, cve, required_action,
+            #   short_description, vendor_project, product, due_date,
+            #   ransomware_flag, vulnerability_name
             detail = {
                 "cve": first[3] if len(first) > 3 else None,
                 "required_action": first[4] if len(first) > 4 else None,
@@ -103,9 +117,60 @@ ORDER BY host
                 "severity": first[1] if len(first) > 1 else None,
                 "cvss": first[2] if len(first) > 2 else None,
                 "ransomware_flag": first[9] if len(first) > 9 else None,
+                "vulnerability_name": first[10] if len(first) > 10 else None,
             }
 
         return hosts, detail
+
+    def _clean_required_action(self, required_action: str) -> str:
+        """Strip CISA boilerplate, keep specific actionable text.
+
+        Returns cleaned text (max ~80 chars). If just boilerplate, returns
+        the generic fallback: "Update or discontinue use per vendor instructions."
+        """
+        text = str(required_action).strip()
+        if not text:
+            return ""
+
+        # Strip the known boilerplate prefix
+        cleaned = self._CISA_BOILERPLATE.sub("", text).strip()
+
+        # If nothing remains after stripping (just boilerplate), use fallback
+        if not cleaned:
+            return "Update or discontinue use per vendor instructions."
+
+        # Trim to ~80 chars, breaking at word boundaries
+        if len(cleaned) > 85:
+            trimmed = cleaned[:85]
+            last_space = trimmed.rfind(" ")
+            if last_space > 60:
+                cleaned = trimmed[:last_space]
+            else:
+                cleaned = trimmed.rstrip(".,; ")
+
+        return cleaned
+
+    def _build_vuln_line(self, detail: Dict[str, Optional[str]]) -> str:
+        """Build the Vuln: line from vulnerability_name or short_description."""
+        vuln_name = detail.get("vulnerability_name")
+
+        if vuln_name and str(vuln_name).strip():
+            return str(vuln_name).strip()
+
+        # Fallback to short_description (first 120 chars)
+        short = detail.get("short_description")
+        if short and str(short).strip():
+            text = str(short).strip()
+            if len(text) > 120:
+                trimmed = text[:120]
+                last_space = trimmed.rfind(" ")
+                if last_space > 80:
+                    text = trimmed[:last_space]
+                else:
+                    text = trimmed.rstrip(".,; ")
+            return text
+
+        return ""
 
     def _format_output(
         self,
@@ -140,16 +205,16 @@ ORDER BY host
         lines.append(" | ".join(header_parts))
         lines.append("")
 
-        # Fix line
+        # Fix line (heuristic: strip CISA boilerplate)
         required = detail.get("required_action")
-        short_desc = detail.get("short_description")
-        if required or short_desc:
-            fix_parts = []
-            if required:
-                fix_parts.append(str(required))
-            if short_desc:
-                fix_parts.append(f" — {short_desc}")
-            lines.append(f"Fix: {' '.join(fix_parts)}")
+        clean_fix = self._clean_required_action(required) if required else ""
+        if clean_fix:
+            lines.append(f"Fix: {clean_fix}")
+
+        # Vuln line (new: use vulnerability_name or fallback to short_description)
+        vuln_line = self._build_vuln_line(detail)
+        if vuln_line:
+            lines.append(f"Vuln: {vuln_line}")
 
         # Vendor line
         vendor_proj = detail.get("vendor_project")
