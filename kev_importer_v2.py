@@ -100,9 +100,10 @@ class KEVImporterV2:
     CONFIG_PATH = Path.home() / ".neurosentinel" / "db.conf"
     LOCAL_JSON_PATH = Path("kev.json")
 
-    def __init__(self, no_update: bool = False, verbose: bool = True) -> None:
+    def __init__(self, no_update: bool = False, verbose: bool = True, dbcheck: bool = False) -> None:
         self.no_update = no_update
         self.verbose = verbose
+        self.dbcheck = dbcheck
         self.db_config = self._load_db_config()
         self.conn = None
         self.cursor = None
@@ -167,6 +168,39 @@ class KEVImporterV2:
         if self.conn and self.conn.is_connected():
             self.conn.close()
             self.log("🔒 Database connection closed.")
+
+    def _check_db(self) -> None:
+        """
+        Verify database connectivity and required table existence.
+        """
+        self._connect_db()
+
+        try:
+            self.cursor.execute("SELECT 1")
+            self.cursor.fetchone()
+
+            self.cursor.execute(
+                """
+                SELECT TABLE_NAME
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = %s
+                  AND TABLE_NAME IN ('kev_run', 'kev_run_data', 'kev_changes', 'scorecard', 'daily_kev_top20', 'plugin_status')
+                """,
+                (self.db_config["database"],),
+            )
+            existing = {r["TABLE_NAME"] for r in self.cursor.fetchall()}
+
+            required = {"kev_run", "kev_run_data", "kev_changes", "scorecard", "daily_kev_top20", "plugin_status"}
+            missing = required - existing
+
+            if missing:
+                print(f"❌ Missing required tables: {', '.join(sorted(missing))}")
+                sys.exit(1)
+
+            print(f"✅ Database OK — connected and all {len(required)} required tables present.")
+
+        finally:
+            self._close_db()
 
     def _check_already_loaded(self) -> None:
         """
@@ -687,6 +721,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip fetching fresh KEV JSON and use local kev.json",
     )
+    parser.add_argument(
+        "--dbcheck",
+        action="store_true",
+        help="Test database connectivity and required tables, then exit",
+    )
     return parser
 
 
@@ -698,7 +737,10 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        importer = KEVImporterV2(no_update=args.noupdate)
+        importer = KEVImporterV2(no_update=args.noupdate, dbcheck=args.dbcheck)
+        if args.dbcheck:
+            importer._check_db()
+            sys.exit(0)
         importer.run()
     except SystemExit:
         raise
