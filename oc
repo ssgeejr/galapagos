@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+SERVICE="openclaw-gateway"
+
+case "$1" in
+    start)
+        systemctl --user start "$SERVICE"
+        ;;
+    stop)
+        systemctl --user stop "$SERVICE"
+        ;;
+    restart)
+        systemctl --user restart "$SERVICE"
+        ;;
+    status)
+        systemctl --user status "$SERVICE"
+        ;;
+    help|*)
+        echo "Usage: oc {start|stop|restart|status|help}"
+        ;;
+esac

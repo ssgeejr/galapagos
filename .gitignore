@@ -5,6 +5,17 @@
 
 *.aider.*
 
+# Local runtime / transfer artifacts
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.tgz
+*.tar
+*.tar.gz
+*.zip
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
